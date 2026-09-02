@@ -36,6 +36,7 @@ if not os.path.exists("sessions"):
 
 user_cooldowns = {}
 admins = {}
+unlimited_admins = set() # لیست ادمین‌های VIP (بدون محدودیت)
 
 def get_healthy_accounts_count():
     return len([f for f in os.listdir("sessions") if f.endswith(".session")])
@@ -43,7 +44,7 @@ def get_healthy_accounts_count():
 REP_TYPE = 1
 REP_TARGET = 2
 REP_REASON = 3
-REP_CUSTOM_TEXT = 15  # مرحله جدید برای پرسش متن ریپورت
+REP_CUSTOM_TEXT = 15  
 REP_JOIN = 9
 REP_VIEW = 10
 REP_ACC_COUNT = 4
@@ -57,6 +58,8 @@ ASK_ADMIN_ID = 11
 ASK_ADMIN_TIME = 12
 ASK_ADMIN_UNIT = 13
 ASK_DEL_ACC = 14
+ASK_VIP_ID = 16
+ASK_UNVIP_ID = 17
 
 temp_clients = {}
 
@@ -68,6 +71,8 @@ def is_admin(user_id):
             return True
         else:
             del admins[user_id]
+            if user_id in unlimited_admins:
+                unlimited_admins.remove(user_id)
     return False
 
 def get_reason_object(reason_str):
@@ -88,59 +93,29 @@ def get_report_text(reason, custom_text=None):
         return custom_text
 
     texts = {
-        "rsn_spam": [
-            "This account is sending unsolicited spam messages to users.",
-            "Massive spamming and unsolicited advertisements in groups/channels.",
-            "This channel is used solely for spamming and flooding.",
-            "Spam behavior detected. Promoting unwanted links continuously.",
-            "Unsolicited promotions and spamming community members."
-        ],
-        "rsn_fake": [
-            "This entity is impersonating an official brand to deceive users. Please label as Fake.",
-            "Fake account spreading misinformation and running scams.",
-            "This profile is a clone, impersonating a real person or channel for malicious purposes.",
-            "Identity theft and impersonation. They are using stolen data to phish users."
-        ],
-        "rsn_scam": [
-            "Scam channel pretending to be a verified project to steal funds.",
-            "This channel is running a cryptocurrency scam and deceiving investors.",
-            "Fraudulent activities and scamming people out of their money.",
-            "Phishing attempts and scamming users for their personal data.",
-            "They are scamming users by pretending to sell services they never deliver."
-        ],
-        "rsn_violence": [
-            "This channel is promoting violence and physical harm against individuals.",
-            "Graphic violence and threats are being shared here.",
-            "Inciting violence and dangerous activities.",
-            "Distributing violent content and threatening messages."
-        ],
-        "rsn_porn": [
-            "Posting explicit adult content and pornography.",
-            "Sharing NSFW and pornographic material illegally.",
-            "This channel distributes sexually explicit images and videos.",
-            "Adult content being shared without proper age restrictions."
-        ],
-        "rsn_child": [
-            "This account is sharing child abuse material. Please ban immediately.",
-            "Distributing illegal content involving minors.",
-            "Endangering minors and sharing illegal exploitation material."
-        ],
-        "rsn_copy": [
-            "This channel is distributing copyrighted material without permission.",
-            "Piracy and illegal distribution of copyrighted software/media.",
-            "Infringing on intellectual property rights."
-        ],
-        "rsn_other": [
-            "Promoting hate speech and discrimination against a group of people.",
-            "Distributing illegal materials and breaking Telegram's terms of service.",
-            "Spreading terrorism propaganda and extremist content.",
-            "Engaging in illegal activities and violating platform rules."
-        ]
+        "rsn_spam": ["This account is sending unsolicited spam messages to users."],
+        "rsn_fake": ["This entity is impersonating an official brand to deceive users. Please label as Fake."],
+        "rsn_scam": ["Scam channel pretending to be a verified project to steal funds."],
+        "rsn_violence": ["This channel is promoting violence and physical harm against individuals."],
+        "rsn_porn": ["Posting explicit adult content and pornography."],
+        "rsn_child": ["This account is sharing child abuse material. Please ban immediately."],
+        "rsn_copy": ["This channel is distributing copyrighted material without permission."],
+        "rsn_other": ["Engaging in illegal activities and violating platform rules."]
     }
     return random.choice(texts.get(reason, texts["rsn_other"]))
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    
+    # قفل امنیتی: مسدود کردن کامل افراد غیر ادمین
+    if not is_admin(user_id):
+        text = "⛔️ شما اجازه استفاده از این ربات را ندارید."
+        if update.callback_query:
+            await update.callback_query.edit_message_text(text)
+        else:
+            await update.message.reply_text(text)
+        return ConversationHandler.END
+
     keyboard = [
         [
             InlineKeyboardButton("Add Account", callback_data="add_acc"),
@@ -168,11 +143,15 @@ async def main_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     await query.answer()
     
+    if not is_admin(user_id):
+        await query.edit_message_text("⛔️ دسترسی غیرمجاز.")
+        return ConversationHandler.END
+        
     if query.data == "open_reports_menu":
-        if not is_admin(user_id) and user_id in user_cooldowns:
+        if user_id != OWNER_ID and user_id not in unlimited_admins and user_id in user_cooldowns:
             if time.time() < user_cooldowns[user_id]:
                 left_mins = int((user_cooldowns[user_id] - time.time()) / 60)
-                msg = f"شما در محدودیت هستید. لطفاً {left_mins} دقیقه دیگر تلاش کنید."
+                msg = f"⏱ شما در محدودیت هستید. لطفاً {left_mins} دقیقه دیگر تلاش کنید."
                 await query.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_to_main")]]))
                 return ConversationHandler.END
                 
@@ -191,12 +170,13 @@ async def main_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("Delete Account", callback_data="panel_del_acc_btn")],
             [InlineKeyboardButton("Admins List", callback_data="panel_admins")],
             [InlineKeyboardButton("Add Admin", callback_data="panel_add_admin"), InlineKeyboardButton("Delete Admin", callback_data="panel_del_admin")],
+            [InlineKeyboardButton("🌟 VIP Admin (No Limit)", callback_data="panel_vip_admin"), InlineKeyboardButton("⏱ Normal Admin", callback_data="panel_unvip_admin")],
             [InlineKeyboardButton("Back", callback_data="back_to_main")]
         ]
         await query.edit_message_text("پنل مدیریت مالک ربات:\nلطفاً از دکمه‌های زیر استفاده کنید:", reply_markup=InlineKeyboardMarkup(panel_kb))
 
     elif query.data == "panel_test_accs" and user_id == OWNER_ID:
-        await query.edit_message_text("در حال بررسی وضعیت اکانت‌ها...\n(این عملیات بسته به تعداد اکانت‌ها ممکن است کمی زمان ببرد)")
+        await query.edit_message_text("در حال بررسی وضعیت اکانت‌ها...\n(این عملیات ممکن است کمی زمان ببرد)")
         alive = 0
         dead = 0
         for file in os.listdir("sessions"):
@@ -227,10 +207,11 @@ async def main_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for aid, ext in admins.items():
                 if time.time() < ext:
                     left = int((ext - time.time()) / 60)
+                    vip_status = " 🌟 (VIP)" if aid in unlimited_admins else " ⏱ (عادی)"
                     if left > 60:
-                        txt += f"- ID: {aid} ({left // 60} ساعت و {left % 60} دقیقه)\n"
+                        txt += f"- ID: {aid} ({left // 60} ساعت و {left % 60} دقیقه){vip_status}\n"
                     else:
-                        txt += f"- ID: {aid} ({left} دقیقه)\n"
+                        txt += f"- ID: {aid} ({left} دقیقه){vip_status}\n"
         await query.edit_message_text(txt, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="owner_panel")]]))
 
     elif query.data == "panel_del_admin" and user_id == OWNER_ID:
@@ -245,6 +226,8 @@ async def main_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         target_id = int(query.data.split("_")[1])
         if target_id in admins:
             del admins[target_id]
+        if target_id in unlimited_admins:
+            unlimited_admins.remove(target_id)
         kb = [[InlineKeyboardButton(f"حذف ادمین: {aid}", callback_data=f"deladm_{aid}")] for aid in admins.keys()]
         kb.append([InlineKeyboardButton("Back", callback_data="owner_panel")])
         text_msg = "ادمین با موفقیت حذف شد." if admins else "همه ادمین‌ها حذف شدند."
@@ -261,6 +244,7 @@ async def main_menu_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def add_acc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not is_admin(update.effective_user.id): return ConversationHandler.END
     await query.edit_message_text("شماره تلفن اکانت تلگرام را با پیش‌شماره (مثلاً +989123456789) وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
     return ADD_PHONE
 
@@ -325,6 +309,7 @@ async def acc_receive_pass(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def report_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+    if not is_admin(update.effective_user.id): return ConversationHandler.END
     
     if get_healthy_accounts_count() == 0:
         await query.edit_message_text("هیچ اکانتی در دیتابیس موجود نیست. ابتدا از طریق Add Account اکانت اضافه کنید.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="back_to_main")]]))
@@ -371,7 +356,7 @@ async def receive_reason(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("Cancel", callback_data="cancel_conv")]
     ]
     await query.edit_message_text(
-        "آیا متن ریپورت اختصاصی (به زبان انگلیسی) دارید؟\nاگر دارید همین الان متن را ارسال کنید.\nدر غیر این صورت روی دکمه «ندارم» کلیک کنید تا ربات به صورت تصادفی از متن‌های هوشمند خود استفاده کند:", 
+        "آیا متن ریپورت اختصاصی (به زبان انگلیسی) دارید؟\nاگر دارید همین الان متن را ارسال کنید.\nدر غیر این صورت روی دکمه «ندارم» کلیک کنید:", 
         reply_markup=InlineKeyboardMarkup(custom_text_kb)
     )
     return REP_CUSTOM_TEXT
@@ -465,7 +450,8 @@ async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg = await update.message.reply_text("درحال اجرای ریپورت واقعی و برقراری ارتباط با سرور تلگرام...")
     
-    if not is_admin(user_id):
+    # اعمال محدودیت برای ادمین‌های عادی (غیر VIP و غیر مالک)
+    if user_id != OWNER_ID and user_id not in unlimited_admins:
         user_cooldowns[user_id] = time.time() + (20 * 60)
         
     approved = 0
@@ -504,9 +490,7 @@ async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     
             for _ in range(reports_per_acc):
                 try:
-                    # انتخاب متن ریپورت: اگر متن شخصی باشد، همان. وگرنه تصادفی از لیست
                     report_text = get_report_text(reason_code, custom_text)
-                    
                     await client(ReportPeerRequest(peer=target_entity, reason=report_reason_obj, message=report_text))
                     approved += 1
                     await asyncio.sleep(1)
@@ -528,8 +512,8 @@ async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
                 
     final_text = "عملیات ریپورت واقعی با موفقیت پایان یافت."
-    if not is_admin(user_id):
-        final_text += "\nشما ۲۰ دقیقه محدود شدید."
+    if user_id != OWNER_ID and user_id not in unlimited_admins:
+        final_text += "\n⏱ شما به مدت ۲۰ دقیقه محدود شدید."
         
     await msg.reply_text(final_text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Main Menu", callback_data="back_to_main")]]))
     return ConversationHandler.END
@@ -539,7 +523,7 @@ async def admin_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     if len(admins) >= 14:
-        await query.edit_message_text("ظرفیت ادمین‌ها پر است.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="owner_panel")]]))
+        await query.edit_message_text("ظرفیت ادمین‌ها پر است (حداکثر ۱۴ نفر).", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back", callback_data="owner_panel")]]))
         return ConversationHandler.END
     await query.edit_message_text("آیدی عددی کاربر را بفرستید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_owner_action")]]))
     return ASK_ADMIN_ID
@@ -569,7 +553,36 @@ async def admin_receive_unit(update: Update, context: ContextTypes.DEFAULT_TYPE)
     
     secs = amount * 60 if unit == 'm' else amount * 3600 if unit == 'h' else amount * 86400
     admins[new_id] = time.time() + secs
-    await query.edit_message_text(f"کاربر با موفقیت ادمین شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Panel", callback_data="owner_panel")]]))
+    await query.edit_message_text(f"کاربر {new_id} با موفقیت به لیست ادمین‌های عادی (با محدودیت ۲۰ دقیقه‌ای) اضافه شد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Panel", callback_data="owner_panel")]]))
+    return ConversationHandler.END
+
+async def vip_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("آیدی عددی ادمینی که می‌خواهید به حالت 🌟 VIP (بدون محدودیت) دربیاید را وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_owner_action")]]))
+    return ASK_VIP_ID
+
+async def vip_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.text.isdigit(): return ASK_VIP_ID
+    target_id = int(update.message.text)
+    unlimited_admins.add(target_id)
+    if target_id in user_cooldowns:
+        del user_cooldowns[target_id]
+    await update.message.reply_text(f"ادمین {target_id} اکنون 🌟 VIP است و هیچ محدودیت زمانی ندارد.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Panel", callback_data="owner_panel")]]))
+    return ConversationHandler.END
+
+async def unvip_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_text("آیدی عددی ادمینی که می‌خواهید به حالت ⏱ عادی (محدودیت ۲۰ دقیقه‌ای) برگردد را وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_owner_action")]]))
+    return ASK_UNVIP_ID
+
+async def unvip_receive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message.text.isdigit(): return ASK_UNVIP_ID
+    target_id = int(update.message.text)
+    if target_id in unlimited_admins:
+        unlimited_admins.remove(target_id)
+    await update.message.reply_text(f"ادمین {target_id} به حالت ⏱ عادی برگشت.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Back to Panel", callback_data="owner_panel")]]))
     return ConversationHandler.END
 
 async def del_acc_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -642,13 +655,17 @@ if __name__ == "__main__":
     owner_conv = ConversationHandler(
         entry_points=[
             CallbackQueryHandler(admin_start, pattern="^panel_add_admin$"),
-            CallbackQueryHandler(del_acc_start, pattern="^panel_del_acc_btn$")
+            CallbackQueryHandler(del_acc_start, pattern="^panel_del_acc_btn$"),
+            CallbackQueryHandler(vip_start, pattern="^panel_vip_admin$"),
+            CallbackQueryHandler(unvip_start, pattern="^panel_unvip_admin$")
         ],
         states={
             ASK_ADMIN_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_id)],
             ASK_ADMIN_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_time)],
             ASK_ADMIN_UNIT: [CallbackQueryHandler(admin_receive_unit, pattern="^au_")],
-            ASK_DEL_ACC: [MessageHandler(filters.TEXT & ~filters.COMMAND, del_acc_receive)]
+            ASK_DEL_ACC: [MessageHandler(filters.TEXT & ~filters.COMMAND, del_acc_receive)],
+            ASK_VIP_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, vip_receive)],
+            ASK_UNVIP_ID: [MessageHandler(filters.TEXT & ~filters.COMMAND, unvip_receive)]
         },
         fallbacks=[CallbackQueryHandler(cancel_owner_callback, pattern="^cancel_owner_action$")]
     )
