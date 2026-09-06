@@ -107,7 +107,6 @@ def get_report_text(reason, custom_text=None):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     
-    # قفل امنیتی: مسدود کردن کامل افراد غیر ادمین
     if not is_admin(user_id):
         text = "⛔️ شما اجازه استفاده از این ربات را ندارید."
         if update.callback_query:
@@ -425,8 +424,13 @@ async def receive_acc_count(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['count'] = req_count
     ttype = context.user_data['target_type']
     max_r = 1 if ttype == "tt_post" else 3
+    user_id = update.effective_user.id
     
-    await update.message.reply_text(f"هر اکانت چند بار ریپورت ارسال کند؟ (حداکثر: {max_r})", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
+    if user_id == OWNER_ID or user_id in unlimited_admins:
+        await update.message.reply_text("🌟 ادمین ویژه: هر اکانت چند بار ریپورت ارسال کند؟ (بدون محدودیت سقف، هر عددی می‌توانید وارد کنید):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
+    else:
+        await update.message.reply_text(f"هر اکانت چند بار ریپورت ارسال کند؟ (حداکثر مجاز: {max_r})", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
+        
     return REP_PER_ACC
 
 async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -436,12 +440,14 @@ async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reports_per_acc = int(update.message.text)
     ttype = context.user_data['target_type']
     max_r = 1 if ttype == "tt_post" else 3
-    
-    if reports_per_acc > max_r:
-        await update.message.reply_text(f"بیشتر از {max_r} مجاز نیست. عدد کمتری وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
-        return REP_PER_ACC
-        
     user_id = update.effective_user.id
+    
+    # اعمال محدودیت سقف ریپورت فقط برای ادمین‌های عادی
+    if user_id != OWNER_ID and user_id not in unlimited_admins:
+        if reports_per_acc > max_r:
+            await update.message.reply_text(f"بیشتر از {max_r} مجاز نیست. عدد کمتری وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Cancel", callback_data="cancel_conv")]]))
+            return REP_PER_ACC
+        
     acc_count = context.user_data['count']
     target_link = context.user_data['target']
     reason_code = context.user_data['reason']
@@ -450,7 +456,6 @@ async def receive_per_acc(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     msg = await update.message.reply_text("درحال اجرای ریپورت واقعی و برقراری ارتباط با سرور تلگرام...")
     
-    # اعمال محدودیت برای ادمین‌های عادی (غیر VIP و غیر مالک)
     if user_id != OWNER_ID and user_id not in unlimited_admins:
         user_cooldowns[user_id] = time.time() + (20 * 60)
         
